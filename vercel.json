@@ -5,7 +5,14 @@
     { "src": "api/*.py", "use": "@vercel/python" }
   ],
   "routes": [
-    { "src": "/api/(.*)", "dest": "api/$1.py" },
+    { "src": "/api/obtener_datos", "dest": "/api/obtener_datos.py" },
+    { "src": "/api/premarket", "dest": "/api/premarket.py" },
+    { "src": "/api/sensibilidad", "dest": "/api/sensibilidad.py" },
+    { "src": "/api/rayos_x", "dest": "/api/rayos_x.py" },
+    { "src": "/api/telegram", "dest": "/api/telegram.py" },
+    { "src": "/api/guardar_par", "dest": "/api/guardar_par.py" },
+    { "src": "/api/borrar_par", "dest": "/api/borrar_par.py" },
+    { "src": "/api/mover_par", "dest": "/api/mover_par.py" },
     { "src": "/(.*)", "dest": "/index.html" }
   ]
 }

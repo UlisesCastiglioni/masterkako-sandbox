@@ -1,12 +1,11 @@
 {
-  "crons": [
-    {
-      "path": "/api/recolector",
-      "schedule": "0 22 * * 1-5"
-    },
-    {
-      "path": "/api/telegram",
-      "schedule": "10 22 * * 1-5"
-    }
+  "version": 2,
+  "builds": [
+    { "src": "index.html", "use": "@vercel/static" },
+    { "src": "api/*.py", "use": "@vercel/python" }
+  ],
+  "routes": [
+    { "src": "/api/(.*)", "dest": "api/$1.py" },
+    { "src": "/(.*)", "dest": "/index.html" }
   ]
 }

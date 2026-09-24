@@ -741,6 +741,35 @@ let pmTimerSeconds = 300;
 let pmTimerInterval = null;
 
 const fmtUSD = v => '$' + Math.abs(v || 0).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+// ── FIX BUG DE FECHAS CONGELADAS ──
+// El array data.dates que llega de /api/obtener_datos puede quedar "pisado"
+// cuando el backend actualiza los precios intradía sin actualizar la fecha
+// del último registro (los cierres avanzan, la fecha no). En vez de confiar
+// en ese array para los últimos días, calculamos la fecha real contando
+// días hábiles (Lun-Vie) hacia atrás desde HOY. `stepsAgo` = cuántas ruedas
+// atrás está ese nodo respecto del más reciente (0 = hoy).
+function tradingDayLabel(stepsAgo){
+  if(stepsAgo < 0) stepsAgo = 0;
+  const d = new Date();
+  let remaining = Math.round(stepsAgo);
+  while(remaining > 0){
+    d.setDate(d.getDate() - 1);
+    const dow = d.getDay(); // 0=Domingo, 6=Sábado
+    if(dow !== 0 && dow !== 6) remaining--;
+  }
+  const dd = String(d.getDate()).padStart(2,'0');
+  const mm = String(d.getMonth()+1).padStart(2,'0');
+  return `${dd}/${mm}`;
+}
+
+// ── Flechas de suba/baja, reutilizables en todo Pre-Market ──
+function arrowFor(num){
+  if(num === undefined || num === null || isNaN(num)) return { arrow:'➡', color:'var(--muted)' };
+  if(num > 0.001) return { arrow:'▲', color:'var(--green)' };
+  if(num < -0.001) return { arrow:'▼', color:'var(--err)' };
+  return { arrow:'➡', color:'var(--muted)' };
+}
 function getPairThr(key){ return db[key] ? (db[key].optimalThr || 20) : 20; }
 function loadRealPortfolios(){ try{ return JSON.parse(localStorage.getItem('mk_global_live_pfs')||'[]'); }catch(e){ return []; } }
 function saveRealPortfolios(pfs){ localStorage.setItem('mk_global_live_pfs', JSON.stringify(pfs)); }
@@ -1001,8 +1030,7 @@ function selectPair(key) {
           else if(res.type === 'ERROR') icon = '❌';
           else if(res.type === 'OPPORTUNITY') icon = '⚠️';
 
-          let f = data.dates[i] ? data.dates[i].split('/') : ['--','--'];
-          let dateStr = f[0] + '/' + f[1];
+          let dateStr = tradingDayLabel(last - i);
           flipsHtml += `<div class="mkx-track-node"><div class="mkx-track-sig" style="background:${bgCol};">${txtSig}</div><div class="mkx-track-res" title="${res.text}">${icon}</div><div class="mkx-track-date">${dateStr}</div></div>`;
       }
       document.getElementById('mc-flips').innerHTML = flipsHtml;
@@ -1131,12 +1159,13 @@ function drawLogTable(data, thr) {
     let tickerSig = sig === 'STOCK' ? data.stock : (sig === 'BONO' ? data.bono : 'CASH');
     let sigCol = sig === 'STOCK' ? 'var(--green)' : (sig === 'BONO' ? 'var(--blue)' : 'var(--muted)'); 
     let reality = (rS > rB && rS > 0) ? data.stock : (rB > rS && rB > 0) ? data.bono : 'CASH';
-    let isFomc = data.dates[i] && FOMC_DATES.some(f => String(data.dates[i]) === f || String(data.dates[i]).startsWith(f));
-    let rowHtml = `<tr><td style="font-weight:bold;">${data.dates[i]||'--'}${isFomc?'<span style="color:var(--warn);font-size:10px;margin-left:4px;">FED</span>':''}</td><td>${sa.toFixed(1)}</td><td style="color:${sigCol};font-weight:bold;">${tickerSig}</td><td style="color:${rS>0?'var(--green)':'var(--err)'}">${(rS*100).toFixed(2)}%</td><td style="color:${rB>0?'var(--blue)':'var(--err)'}">${(rB*100).toFixed(2)}%</td><td><span style="background:var(--panel);box-shadow:var(--neo-out-sm);padding:3px 7px;border-radius:4px;font-weight:bold;">${reality}</span></td><td style="color:${res.color||'#fff'};font-weight:600;">${res.text||'--'}</td><td style="text-align:right;font-weight:bold;color:${pctAcum>=0?'var(--green)':'var(--err)'};">${pctAcum>0?'+':''}${pctAcum.toFixed(2)}%</td></tr>`;
-    let mesAnio = data.dates[i] ? data.dates[i].substring(3) : 'Desconocido';
+    let dLabel = tradingDayLabel(last - i); // FIX: fecha calculada, no la del backend (puede venir congelada)
+    let isFomc = FOMC_DATES.some(f => dLabel === f || dLabel.startsWith(f));
+    let rowHtml = `<tr><td style="font-weight:bold;">${dLabel}${isFomc?'<span style="color:var(--warn);font-size:10px;margin-left:4px;">FED</span>':''}</td><td>${sa.toFixed(1)}</td><td style="color:${sigCol};font-weight:bold;">${tickerSig}</td><td style="color:${rS>0?'var(--green)':'var(--err)'}">${(rS*100).toFixed(2)}%</td><td style="color:${rB>0?'var(--blue)':'var(--err)'}">${(rB*100).toFixed(2)}%</td><td><span style="background:var(--panel);box-shadow:var(--neo-out-sm);padding:3px 7px;border-radius:4px;font-weight:bold;">${reality}</span></td><td style="color:${res.color||'#fff'};font-weight:600;">${res.text||'--'}</td><td style="text-align:right;font-weight:bold;color:${pctAcum>=0?'var(--green)':'var(--err)'};">${pctAcum>0?'+':''}${pctAcum.toFixed(2)}%</td></tr>`;
+    let mesAnio = dLabel.substring(3);
     if(!monthsGroup[mesAnio]) monthsGroup[mesAnio] = [];
     monthsGroup[mesAnio].push(rowHtml);
-    currentLogRows.push([data.dates[i], sa.toFixed(1), tickerSig, (rS*100).toFixed(2)+'%', (rB*100).toFixed(2)+'%', reality, res.text, pctAcum.toFixed(2)+'%']);
+    currentLogRows.push([dLabel, sa.toFixed(1), tickerSig, (rS*100).toFixed(2)+'%', (rB*100).toFixed(2)+'%', reality, res.text, pctAcum.toFixed(2)+'%']);
   }
   let folderHtml = '';
   let sortedMonths = Object.keys(monthsGroup).sort((a,b)=>{ let pa=a.split('/'), pb=b.split('/'); return new Date(pb[1], pb[0]-1) - new Date(pa[1], pa[0]-1); });
@@ -1997,10 +2026,10 @@ function renderAuditoriaTab(){
   if(monthlyEl){
     const porMes = {};
     ranking.forEach(r => {
-      const data = db[r.key], sp = data.stockPrices, bp = data.bonoPrices, dates = data.dates || [];
+      const data = db[r.key], sp = data.stockPrices, bp = data.bonoPrices;
       const last = sp.length - 1;
       for(let i = Math.max(1, last - auditDays + 1); i <= last; i++){
-        const mesAnio = dates[i] ? dates[i].substring(3) : 'Desconocido';
+        const mesAnio = tradingDayLabel(last - i).substring(3); // FIX: fecha calculada, no congelada
         const rS = sp[i-1] ? (sp[i]-sp[i-1])/sp[i-1] : 0;
         const rB = bp[i-1] ? (bp[i]-bp[i-1])/bp[i-1] : 0;
         const sig = (data.sigData && data.sigData.signals && data.sigData.signals[i-1]) || 'CASH';
@@ -2123,8 +2152,7 @@ function startPremarketTimer(){
   }, 1000);
 }
 
-// Helper: prueba varios nombres de campo posibles dentro de un objeto,
-// porque no conocemos con 100% de certeza cómo nombra tu backend cada valor.
+// Helper de respaldo por si algún campo llega con otro nombre
 function _pickField(obj, ...keys){
   for(const k of keys){ if(obj && obj[k] !== undefined && obj[k] !== null) return obj[k]; }
   return undefined;
@@ -2135,67 +2163,161 @@ function _fmtNum(v){
   return isNaN(n) ? String(v) : n.toFixed(2);
 }
 
+let _lastCCLValue = null; // para calcular flecha de CCL comparando contra el último poll
+
+// ── BANNER DE SESGO DE MERCADO: 10 estados posibles ──
+// Se calcula 100% en el front, combinando el promedio de futuros (ES/NQ/YM),
+// el nivel del VIX y su variación, y el movimiento de tasas (US10Y).
+function calcularSesgoMercado(d){
+  const futuros = Array.isArray(d.futuros) ? d.futuros : [];
+  const cambios = futuros.map(f => parseFloat(f.cambio)).filter(n => !isNaN(n));
+  const avgFut = cambios.length ? cambios.reduce((a,b)=>a+b,0) / cambios.length : 0;
+
+  const indices = Array.isArray(d.indices_macro) ? d.indices_macro : [];
+  const vixObj = indices.find(m => m.id === 'vix');
+  const us10yObj = indices.find(m => m.id === 'us10y');
+  const vixVal = vixObj ? parseFloat(vixObj.valor) : 18;
+  const vixChg = vixObj ? parseFloat(vixObj.cambio) : 0;
+  const us10yChg = us10yObj ? parseFloat(us10yObj.cambio) : 0;
+
+  // 1. Pánico extremo domina todo lo demás
+  if(vixVal >= 30){
+    return { label:'🆘 PÁNICO / STRESS EXTREMO', color:'var(--err)', bg:'rgba(239,68,68,0.22)',
+      desc:`VIX en ${vixVal.toFixed(1)}, zona de crisis. Los futuros están descontando ventas forzadas y cobertura masiva. Evitar apalancamiento y priorizar preservación de capital hoy.` };
+  }
+  // 2. Bajista fuerte
+  if(avgFut <= -0.8){
+    return { label:'🔴 BAJISTA FUERTE (Risk-Off)', color:'var(--err)', bg:'rgba(239,68,68,0.18)',
+      desc:`Futuros promediando ${avgFut.toFixed(2)}%. Apertura con presión vendedora clara en los 3 índices. Día para gestionar coberturas, no para nuevas compras agresivas.` };
+  }
+  // 3. Bajista
+  if(avgFut <= -0.3){
+    return { label:'🔴 BAJISTA', color:'var(--err)', bg:'rgba(239,68,68,0.15)',
+      desc:`Futuros con sesgo negativo (${avgFut.toFixed(2)}% promedio). Esperable una apertura roja, monitorear si se profundiza tras la campana.` };
+  }
+  // 4. Bajista cauto
+  if(avgFut <= -0.1){
+    return { label:'🟠 BAJISTA CAUTO', color:'var(--warn)', bg:'rgba(245,158,11,0.15)',
+      desc:`Leve presión negativa en futuros (${avgFut.toFixed(2)}%). No es una señal fuerte todavía, pero conviene esperar confirmación antes de sumar riesgo.` };
+  }
+  // 5/7. Zona neutral, con o sin nerviosismo del VIX
+  if(avgFut > -0.1 && avgFut < 0.1){
+    if(vixVal >= 22 || vixChg > 5){
+      return { label:'🟡 CAUTELA ALTA (Nerviosismo)', color:'var(--warn)', bg:'rgba(245,158,11,0.15)',
+        desc:`Futuros planos pero el VIX está en ${vixVal.toFixed(1)}${vixChg>5?` y subiendo ${vixChg.toFixed(1)}%`:''}. El mercado está indeciso con cobertura activa — cuidado con movimientos súbitos.` };
+    }
+    return { label:'⚪ NEUTRAL / EN RANGO', color:'var(--blue)', bg:'rgba(59,130,246,0.12)',
+      desc:`Futuros sin dirección clara (${avgFut.toFixed(2)}% promedio) y volatilidad contenida (VIX ${vixVal.toFixed(1)}). Jornada probablemente técnica, sin catalizador macro fuerte.` };
+  }
+  // 6. Alcista con VIX elevado = cautela
+  if(avgFut < 0.3 && vixVal >= 20){
+    return { label:'🟡 CAUTELA (Suba Frágil)', color:'var(--warn)', bg:'rgba(245,158,11,0.15)',
+      desc:`Futuros levemente positivos pero el VIX en ${vixVal.toFixed(1)} sugiere que la suba no tiene convicción sólida. Podría revertirse rápido.` };
+  }
+  // 8. Alcista cauto
+  if(avgFut < 0.3){
+    return { label:'🔵 ALCISTA CAUTO', color:'var(--blue)', bg:'rgba(59,130,246,0.15)',
+      desc:`Futuros levemente positivos (${avgFut.toFixed(2)}%) con volatilidad controlada. Sesgo favorable pero sin fuerza como para perseguir agresivamente.` };
+  }
+  // 9. Alcista
+  if(avgFut < 0.8){
+    return { label:'🟢 ALCISTA', color:'var(--green)', bg:'rgba(34,197,94,0.15)',
+      desc:`Futuros promediando +${avgFut.toFixed(2)}% con VIX ${vixVal.toFixed(1)}${us10yChg<0?' y tasas cediendo':''}. Contexto favorable para continuidad alcista en la apertura.` };
+  }
+  // 10. Alcista fuerte
+  return { label:'🟢 ALCISTA FUERTE (Risk-On)', color:'var(--green)', bg:'rgba(34,197,94,0.22)',
+    desc:`Futuros con fuerte impulso (+${avgFut.toFixed(2)}% promedio) y volatilidad baja. Apertura con viento de cola — atención a sobre-extensión si continúa todo el día.` };
+}
+
 async function cargarPreMarket(){
   const badge = document.getElementById('pm-flash-badge');
   const headline = document.getElementById('pm-flash-headline');
+  const desc = document.getElementById('pm-flash-desc');
+  const box = document.getElementById('pm-flash-box');
   try{
     const res = await fetch(`/api/premarket?t=${Date.now()}`);
     if(!res.ok) throw new Error('HTTP ' + res.status);
     const d = await res.json();
-    // Log crudo para diagnóstico: si algún campo sigue sin aparecer en la UI,
-    // abrí la consola, mirá este objeto y decime qué nombre de campo le falta al mapeo.
     console.log('[Masterkako] /api/premarket respuesta cruda:', d);
 
+    // ── Banner de sesgo (10 estados) ──
+    const sesgo = calcularSesgoMercado(d);
     if(badge){
-      badge.innerText = d.status === 'success' ? '✅ DATOS EN VIVO' : (d.sesgo || '⚠️ SESGO DESCONOCIDO');
-      badge.style.background = 'rgba(56,178,105,0.2)'; badge.style.color='var(--green)'; badge.style.border='1px solid var(--green)';
+      badge.innerText = sesgo.label;
+      badge.style.background = sesgo.bg; badge.style.color = sesgo.color; badge.style.border = `1px solid ${sesgo.color}`;
     }
-    if(headline){
-      headline.innerText = d.headline || `Datos actualizados a las ${d.timestamp || '--:--'} hs.`;
-    }
+    if(headline) headline.innerText = `Datos en vivo · Actualizado a las ${d.timestamp || '--:--'} hs`;
+    if(desc) desc.innerText = sesgo.desc;
+    if(box) box.style.boxShadow = `var(--neo-out-lg), inset 0 0 0 1px ${sesgo.color}22`;
 
-    // CCL
-    const cclVal = _pickField(d.ccl, 'precio', 'valor', 'value');
+    // ── CCL con flecha vs el último poll ──
+    const cclVal = _pickField(d.ccl, 'precio', 'valor');
     const cclEl = document.getElementById('pm-ccl-val');
-    if(cclEl && cclVal !== undefined) cclEl.innerText = '$' + _fmtNum(cclVal);
+    if(cclEl && cclVal !== undefined){
+      const numCcl = parseFloat(cclVal);
+      let arrowHtml = '';
+      if(_lastCCLValue !== null && !isNaN(numCcl)){
+        const diff = numCcl - _lastCCLValue;
+        const a = arrowFor(diff);
+        arrowHtml = ` <span style="font-size:16px;color:${a.color};">${a.arrow}</span>`;
+      }
+      cclEl.innerHTML = '$' + _fmtNum(cclVal) + arrowHtml;
+      if(!isNaN(numCcl)) _lastCCLValue = numCcl;
+    }
     const cclSrcEl = document.getElementById('pm-ccl-source');
-    if(cclSrcEl && d.ccl && d.ccl.fuente) cclSrcEl.innerText = d.ccl.fuente;
+    if(cclSrcEl && d.ccl){
+      cclSrcEl.innerText = `${d.ccl.fuente || 'Fuente desconocida'} · ${d.ccl.fecha || ''}`;
+    }
 
-    // Futuros: array de objetos {nombre, ticker, ...}. Mapeamos por ticker/nombre a las 3 tarjetas fijas (ES/NQ/YM).
+    // ── Futuros: {nombre, ticker, valor, cambio} → tarjetas ES/NQ/YM con flecha ──
     if(Array.isArray(d.futuros)){
-      const futMap = { es: 'pm-fut-es', nq: 'pm-fut-nq', ym: 'pm-fut-ym' };
       d.futuros.forEach(f => {
         const ticker = (f.ticker || f.nombre || '').toUpperCase();
         let targetId = null;
-        if(ticker.includes('ES') || ticker.includes('S&P') || ticker.includes('SPX')) targetId = 'pm-fut-es';
-        else if(ticker.includes('NQ') || ticker.includes('NASDAQ')) targetId = 'pm-fut-nq';
-        else if(ticker.includes('YM') || ticker.includes('DOW')) targetId = 'pm-fut-ym';
+        if(ticker.includes('ES')) targetId = 'pm-fut-es';
+        else if(ticker.includes('NQ')) targetId = 'pm-fut-nq';
+        else if(ticker.includes('YM')) targetId = 'pm-fut-ym';
         if(!targetId) return;
-        const val = _pickField(f, 'variacion', 'valor', 'precio', 'cambio', 'value');
+        const cambio = parseFloat(f.cambio);
+        const precio = parseFloat(f.valor);
         const el = document.getElementById(targetId);
         const subEl = document.getElementById(targetId + '-sub');
-        if(el && val !== undefined){
-          const num = typeof val === 'number' ? val : parseFloat(val);
-          el.innerText = (isNaN(num) ? val : (num > 0 ? '+' : '') + num.toFixed(2) + '%');
-          el.style.color = !isNaN(num) ? (num >= 0 ? 'var(--green)' : 'var(--err)') : '';
+        if(el){
+          const a = arrowFor(cambio);
+          el.innerHTML = `<span style="color:${a.color};">${a.arrow} ${isNaN(cambio)?'--':(cambio>0?'+':'')+cambio.toFixed(2)+'%'}</span>`;
         }
-        if(subEl) subEl.innerText = f.nombre || ticker;
+        if(subEl) subEl.innerText = `${f.nombre || ticker} · ${isNaN(precio)?'--':precio.toLocaleString('en-US',{maximumFractionDigits:2})} pts`;
       });
     }
 
-    // Índices macro: array de objetos {id, nombre, ...}. id esperado: vix, us10y, dxy, wti, oro.
+    // ── Índices macro: {id, nombre, valor, cambio, lectura, color} → tarjetas con flecha + explicación dinámica ──
     if(Array.isArray(d.indices_macro)){
-      const idMap = { vix:'pm-vix-val', us10y:'pm-us10y-val', dxy:'pm-dxy-val', wti:'pm-wti-val', oro:'pm-oro-val', gold:'pm-oro-val' };
+      const idMap = { vix:'pm-vix', us10y:'pm-us10y', dxy:'pm-dxy', wti:'pm-wti', oro:'pm-oro' };
       d.indices_macro.forEach(m => {
-        const targetId = idMap[(m.id || '').toLowerCase()];
-        if(!targetId) return;
-        const val = _pickField(m, 'valor', 'precio', 'value', 'cambio');
-        const el = document.getElementById(targetId);
-        if(el && val !== undefined) el.innerText = _fmtNum(val);
+        const prefix = idMap[(m.id || '').toLowerCase()];
+        if(!prefix) return;
+        const valEl = document.getElementById(prefix + '-val');
+        const guideEl = document.getElementById(prefix + '-guide');
+        const badgeEl = document.getElementById(prefix + '-badge'); // solo existe para vix
+        const cambio = parseFloat(m.cambio);
+        const a = arrowFor(cambio);
+        if(valEl){
+          valEl.innerHTML = `${m.valor ?? '--'} <span style="font-size:14px;color:${a.color};">${a.arrow} ${isNaN(cambio)?'':(cambio>0?'+':'')+cambio.toFixed(2)+'%'}</span>`;
+          valEl.style.color = m.color || '#fff';
+        }
+        if(guideEl && m.lectura){
+          guideEl.innerHTML = `<strong>Lectura de hoy:</strong> ${m.lectura}`;
+          guideEl.style.borderLeft = `3px solid ${m.color || 'var(--muted)'}`;
+        }
+        if(badgeEl && m.id === 'vix'){
+          badgeEl.innerText = parseFloat(m.valor) >= 25 ? 'Pánico' : (parseFloat(m.valor) >= 18 ? 'Tensión' : 'Calma');
+          badgeEl.style.color = m.color || 'var(--err)';
+        }
       });
     }
   } catch(e){
-    if(headline) headline.innerText = 'Datos de mercado no disponibles (requiere endpoint /api/premarket).';
+    if(headline) headline.innerText = 'Datos de mercado no disponibles.';
+    if(desc) desc.innerText = 'No se pudo conectar con /api/premarket. Verificá que el endpoint esté desplegado y respondiendo.';
     if(badge){ badge.innerText = '⚠️ SIN CONEXIÓN'; badge.style.background='rgba(239,68,68,0.15)'; badge.style.color='var(--err)'; badge.style.border='1px solid var(--err)'; }
     console.warn('[Masterkako] /api/premarket no disponible todavía:', e.message);
   }
@@ -2206,17 +2328,55 @@ async function analizarSensibilidadMacro(){
   if(!ticker) return;
   const resultBox = document.getElementById('pm-sens-result');
   const tickerEl = document.getElementById('pm-sens-ticker');
+  const sectorEl = document.getElementById('pm-sens-sector');
+  const expoBadgeEl = document.getElementById('pm-sens-expo-badge');
+  const betaBadgeEl = document.getElementById('pm-sens-badge');
   const explEl = document.getElementById('pm-sens-explicacion');
+  const gridEl = document.getElementById('pm-sens-grid');
+
   if(resultBox) resultBox.style.display = 'block';
   if(tickerEl) tickerEl.innerText = ticker;
+  if(sectorEl) sectorEl.innerText = '--';
   if(explEl) explEl.innerText = '⏳ Consultando exposición macro...';
+  if(gridEl) gridEl.innerHTML = '';
+
   try{
     const res = await fetch(`/api/sensibilidad?ticker=${ticker}`);
     if(!res.ok) throw new Error('HTTP ' + res.status);
     const d = await res.json();
-    if(explEl) explEl.innerText = d.explicacion || 'Sin datos.';
+
+    if(sectorEl) sectorEl.innerText = d.sector || '';
+    if(explEl) explEl.innerText = d.explicacion || 'Sin datos disponibles para este ticker.';
+
+    // Badge de nivel de exposición general (color según ALTA/MEDIA/BAJA/AUTÓNOMO)
+    if(expoBadgeEl){
+      const expo = (d.exposicion || '').toUpperCase();
+      let col = 'var(--muted)';
+      if(expo.includes('ALTA')) col = 'var(--err)';
+      else if(expo.includes('MEDIA')) col = 'var(--warn)';
+      else if(expo.includes('BAJA')) col = 'var(--green)';
+      else if(expo.includes('AUTÓNOM') || expo.includes('AUTONOM')) col = 'var(--blue)';
+      expoBadgeEl.innerText = `Exposición: ${d.exposicion || '--'}`;
+      expoBadgeEl.style.background = `${col}22`; expoBadgeEl.style.color = col; expoBadgeEl.style.border = `1px solid ${col}`;
+    }
+    // Badge de Beta
+    if(betaBadgeEl){
+      betaBadgeEl.innerText = `Beta: ${d.beta || '--'}`;
+      betaBadgeEl.style.background = 'rgba(59,130,246,0.15)'; betaBadgeEl.style.color = 'var(--blue)'; betaBadgeEl.style.border = '1px solid var(--blue)';
+    }
+    // Grilla de sensibilidad a Tasas / Dólar / Petróleo / VIX
+    if(gridEl && d.sensibilidad){
+      const items = [
+        { lbl:'Tasas (US10Y)', val:d.sensibilidad.tasas },
+        { lbl:'Dólar (DXY)', val:d.sensibilidad.dolar },
+        { lbl:'Petróleo (WTI)', val:d.sensibilidad.petroleo },
+        { lbl:'Volatilidad (VIX)', val:d.sensibilidad.vix }
+      ];
+      gridEl.innerHTML = items.map(it => `<div class="radar-check-item"><span>${it.lbl}</span><span>${it.val || '--'}</span></div>`).join('');
+    }
   } catch(e){
-    if(explEl) explEl.innerText = '⚠️ Este análisis requiere el endpoint /api/sensibilidad en tu backend, que todavía no está respondiendo.';
+    if(explEl) explEl.innerText = '⚠️ No se pudo conectar con /api/sensibilidad. Verificá que el endpoint esté desplegado.';
+    console.warn('[Masterkako] /api/sensibilidad no disponible:', e.message);
   }
 }
 

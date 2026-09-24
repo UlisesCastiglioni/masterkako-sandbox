@@ -1,2 +1,1 @@
-requests
-yfinance
+psycopg2-binary
